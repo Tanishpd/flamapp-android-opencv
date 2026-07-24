@@ -228,8 +228,11 @@ public class CameraActivity extends AppCompatActivity {
         texture.setOnFrameAvailableListener(surfaceTexture -> {
             surfaceTexture.updateTexImage();
             
-            // In a real implementation, extract frame data from SurfaceTexture
-            // For this example, we'll simulate with a byte array
+            // TODO: this is a stub. frameData is zero-filled, so the native pipeline
+            // currently processes black images rather than the camera feed. Replace
+            // with a real readback from the SurfaceTexture - either an ImageReader on
+            // YUV_420_888 converted to RGBA, or a GL texture readback. See the Status
+            // section of README.md.
             byte[] frameData = new byte[PREVIEW_WIDTH * PREVIEW_HEIGHT * 4];
             
             // Process frame through JNI
