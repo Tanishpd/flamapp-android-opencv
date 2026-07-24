@@ -6,10 +6,24 @@
 
 A high-performance Android application featuring real-time camera processing with OpenCV computer vision algorithms and OpenGL ES hardware-accelerated rendering.
 
+## Status
+
+**Work in progress.** The Camera2 preview, the JNI bridge, the OpenCV native
+layer and the OpenGL renderer are all in place and wired together, but the
+link between the camera and the processing pipeline is still a stub:
+`CameraActivity.startFrameProcessing()` hands `NativeProcessor.processFrame()`
+a zero-filled buffer rather than the actual preview frame, so the pipeline
+currently processes black images.
+
+Finishing it means reading real pixels out of the `SurfaceTexture` — either an
+`ImageReader` on `YUV_420_888` converted to RGBA, or a GL texture readback.
+Until then the performance figures below are targets rather than measurements.
+
 ## 🎯 Features Implemented
 
 ### Android Application Features
-✅ **Live Camera Capture** - Real-time video streaming using Camera2 API  
+🚧 **Live Camera Capture** - Camera2 preview is wired up, but frame data is
+not yet extracted from the SurfaceTexture (see Status)  
 ✅ **Native C++ Processing** - JNI bridge for optimal performance  
 ✅ **OpenCV Integration** - Canny edge detection & Grayscale conversion  
 ✅ **Hardware Rendering** - OpenGL ES 2.0 with custom GLSL shaders  
@@ -191,7 +205,11 @@ public native long processFrame(byte[] data, int width, int height, int mode);
 - **Grayscale**: `cv::cvtColor(input, gray, COLOR_RGBA2GRAY)`
 - **Gaussian Blur**: `cv::GaussianBlur(gray, blurred, Size(5,5), 0)`
 
-## 📊 Performance Metrics
+## 📊 Performance Targets
+
+> **These are design targets, not measured results.** The frame source is
+> currently stubbed (see Status below), so no end-to-end timings have been
+> taken on device.
 
 | Metric | Value |
 |--------|-------|
