@@ -8,22 +8,22 @@ A high-performance Android application featuring real-time camera processing wit
 
 ## Status
 
-**Work in progress.** The Camera2 preview, the JNI bridge, the OpenCV native
-layer and the OpenGL renderer are all in place and wired together, but the
-link between the camera and the processing pipeline is still a stub:
-`CameraActivity.startFrameProcessing()` hands `NativeProcessor.processFrame()`
-a zero-filled buffer rather than the actual preview frame, so the pipeline
-currently processes black images.
+The pipeline is complete end to end: Camera2 delivers frames through an
+`ImageReader` (`YUV_420_888`), they are converted to RGBA, passed over JNI to
+the OpenCV native layer, and rendered with OpenGL ES 2.0.
 
-Finishing it means reading real pixels out of the `SurfaceTexture` — either an
-`ImageReader` on `YUV_420_888` converted to RGBA, or a GL texture readback.
-Until then the performance figures below are targets rather than measurements.
+Building requires the **OpenCV Android SDK**; point `OpenCV_DIR` at it (see
+`jni/CMakeLists.txt`). Without it the Java side compiles but the native library
+does not link.
+
+The performance figures below are design targets. They have not been measured
+on a device.
+
 
 ## 🎯 Features Implemented
 
 ### Android Application Features
-🚧 **Live Camera Capture** - Camera2 preview is wired up, but frame data is
-not yet extracted from the SurfaceTexture (see Status)  
+✅ **Live Camera Capture** - Camera2 frames via ImageReader (YUV_420_888 → RGBA)  
 ✅ **Native C++ Processing** - JNI bridge for optimal performance  
 ✅ **OpenCV Integration** - Canny edge detection & Grayscale conversion  
 ✅ **Hardware Rendering** - OpenGL ES 2.0 with custom GLSL shaders  

@@ -2,7 +2,9 @@ package com.flamapp;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
-import android.graphics.SurfaceTexture;
+import android.graphics.ImageFormat;
+import android.media.Image;
+import android.media.ImageReader;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -25,6 +27,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 
 public class CameraActivity extends AppCompatActivity {
@@ -40,6 +43,7 @@ public class CameraActivity extends AppCompatActivity {
     private CameraManager cameraManager;
     private CameraDevice cameraDevice;
     private CameraCaptureSession captureSession;
+    private ImageReader imageReader;
     private HandlerThread backgroundThread;
     private Handler backgroundHandler;
     
@@ -184,10 +188,15 @@ public class CameraActivity extends AppCompatActivity {
     
     private void createCameraPreview() {
         try {
-            SurfaceTexture texture = new SurfaceTexture(0);
-            texture.setDefaultBufferSize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-            Surface surface = new Surface(texture);
-            
+            // Frames are delivered through an ImageReader rather than a
+            // SurfaceTexture. The old code did `new SurfaceTexture(0)`, binding to GL
+            // texture name 0 — not a real texture in the renderer's context — so
+            // updateTexImage() could never have produced usable pixels.
+            imageReader = ImageReader.newInstance(
+                    PREVIEW_WIDTH, PREVIEW_HEIGHT, ImageFormat.YUV_420_888, 2);
+            imageReader.setOnImageAvailableListener(this::onImageAvailable, backgroundHandler);
+            Surface surface = imageReader.getSurface();
+
             final CaptureRequest.Builder captureRequestBuilder = 
                     cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             captureRequestBuilder.addTarget(surface);
@@ -209,7 +218,6 @@ public class CameraActivity extends AppCompatActivity {
                                 e.printStackTrace();
                             }
                             
-                            startFrameProcessing(texture);
                         }
                         
                         @Override
@@ -224,27 +232,83 @@ public class CameraActivity extends AppCompatActivity {
         }
     }
     
-    private void startFrameProcessing(SurfaceTexture texture) {
-        texture.setOnFrameAvailableListener(surfaceTexture -> {
-            surfaceTexture.updateTexImage();
-            
-            // TODO: this is a stub. frameData is zero-filled, so the native pipeline
-            // currently processes black images rather than the camera feed. Replace
-            // with a real readback from the SurfaceTexture - either an ImageReader on
-            // YUV_420_888 converted to RGBA, or a GL texture readback. See the Status
-            // section of README.md.
-            byte[] frameData = new byte[PREVIEW_WIDTH * PREVIEW_HEIGHT * 4];
-            
-            // Process frame through JNI
+    /**
+     * Called on the background thread each time the camera delivers a frame.
+     * Converts YUV_420_888 to the RGBA layout the native processor expects,
+     * runs it through OpenCV, and hands the result to the GL renderer.
+     */
+    private void onImageAvailable(ImageReader reader) {
+        Image image = reader.acquireLatestImage();
+        if (image == null) {
+            return;
+        }
+        try {
+            byte[] frameData = yuv420ToRgba(image);
             byte[] processedData = NativeProcessor.processFrame(
-                    frameData, PREVIEW_WIDTH, PREVIEW_HEIGHT, processingMode);
-            
+                    frameData, image.getWidth(), image.getHeight(), processingMode);
+
             if (processedData != null) {
-                renderer.updateTexture(processedData, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+                renderer.updateTexture(processedData, image.getWidth(), image.getHeight());
                 glSurfaceView.requestRender();
                 updateFPS();
             }
-        }, backgroundHandler);
+        } finally {
+            // Must close, or the reader starves after `maxImages` frames.
+            image.close();
+        }
+    }
+
+    /**
+     * YUV_420_888 to RGBA_8888.
+     *
+     * The planes cannot be read as flat arrays: the U and V planes carry both a
+     * rowStride and a pixelStride (pixelStride is 2 on the common semi-planar
+     * NV21/NV12 layouts, where U and V are interleaved), and rowStride is often
+     * wider than the image. Both are honoured here.
+     *
+     * Conversion is BT.601 full-range.
+     */
+    private static byte[] yuv420ToRgba(Image image) {
+        final int width = image.getWidth();
+        final int height = image.getHeight();
+
+        final Image.Plane yPlane = image.getPlanes()[0];
+        final Image.Plane uPlane = image.getPlanes()[1];
+        final Image.Plane vPlane = image.getPlanes()[2];
+
+        final ByteBuffer yBuf = yPlane.getBuffer();
+        final ByteBuffer uBuf = uPlane.getBuffer();
+        final ByteBuffer vBuf = vPlane.getBuffer();
+
+        final int yRowStride = yPlane.getRowStride();
+        final int uvRowStride = uPlane.getRowStride();
+        final int uvPixelStride = uPlane.getPixelStride();
+
+        final byte[] out = new byte[width * height * 4];
+
+        for (int row = 0; row < height; row++) {
+            final int uvRow = (row >> 1) * uvRowStride;
+            final int yRow = row * yRowStride;
+
+            for (int col = 0; col < width; col++) {
+                final int y = (yBuf.get(yRow + col) & 0xFF);
+                final int uvIndex = uvRow + (col >> 1) * uvPixelStride;
+
+                final int u = (uBuf.get(uvIndex) & 0xFF) - 128;
+                final int v = (vBuf.get(uvIndex) & 0xFF) - 128;
+
+                int r = (int) (y + 1.402f * v);
+                int g = (int) (y - 0.344136f * u - 0.714136f * v);
+                int b = (int) (y + 1.772f * u);
+
+                final int o = (row * width + col) * 4;
+                out[o]     = (byte) (r < 0 ? 0 : (r > 255 ? 255 : r));
+                out[o + 1] = (byte) (g < 0 ? 0 : (g > 255 ? 255 : g));
+                out[o + 2] = (byte) (b < 0 ? 0 : (b > 255 ? 255 : b));
+                out[o + 3] = (byte) 255;
+            }
+        }
+        return out;
     }
     
     private void updateFPS() {
@@ -288,6 +352,10 @@ public class CameraActivity extends AppCompatActivity {
         if (cameraDevice != null) {
             cameraDevice.close();
             cameraDevice = null;
+        }
+        if (imageReader != null) {
+            imageReader.close();
+            imageReader = null;
         }
         stopBackgroundThread();
         if (glSurfaceView != null) {
